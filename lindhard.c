@@ -1,18 +1,24 @@
 #include <complex.h>
 #include <stdint.h>
 #include <omp.h>
-#include <mkl.h>
 
 #define MEM_ALIGN 64
 #define PAD_UP(size, align) ((((size) + (align) - 1)/(align)) * (align))
 
 #if defined(_WIN32) || defined(_WIN64)
-    #define EXPORT __declspec(dllexport)
+	#define EXPORT __declspec(dllexport)
 	#define aligned_alloc(alignment, size) mkl_malloc((size), (alignment))
 	#define free(ptr) mkl_free((ptr))
+	#include <mkl.h>
+#elif __APPLE__
+	#define EXPORT
+	#include <Accelerate/Accelerate.h>
+	#define MKL_Complex16 double complex
+	#define zheev zheev_
 #else
-    #define EXPORT
+	#define EXPORT
 	#include <stdlib.h>
+	#include <mkl.h>
 #endif
 
 

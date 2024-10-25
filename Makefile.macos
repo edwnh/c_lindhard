@@ -1,0 +1,8 @@
+CC = clang
+OMP_PREFIX = /opt/homebrew/opt/libomp
+CFLAGS += -Xpreprocessor -fopenmp -I$(OMP_PREFIX)/include -O3 -std=c17 -Wall -Wextra
+LDFLAGS += -framework Accelerate -DACCELERATE_NEW_LAPACK
+LDFLAGS += $(OMP_PREFIX)/lib/libomp.a
+
+all:
+	${CC} ${CFLAGS} ${LDFLAGS} -shared -o liblindhard.dylib lindhard.c

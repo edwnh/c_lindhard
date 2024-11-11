@@ -213,3 +213,178 @@ EXPORT void calc_chi0_binned(
 	}
 	free(buffer);
 }
+
+EXPORT void calc_chi0_band_exact(
+		double *restrict chi0_real, double *restrict chi0_imag,
+		const double *restrict ek,
+		const double complex *restrict Ukdag,
+		const double complex *restrict sub_phase,
+		const double *restrict ws, const size_t nw, const double gamma,
+		const int32_t *restrict qs, const size_t nq,
+		const size_t L3, const size_t L2, const size_t L1, const size_t Nband,
+		const int n_threads)
+{
+	const double gamma_sq = gamma*gamma;
+
+	#pragma omp parallel for num_threads(n_threads)
+	for (size_t iq = 0; iq < nq; iq++) {
+		for (size_t ik3 = 0; ik3 < L3; ik3++)
+		for (size_t ik2 = 0; ik2 < L2; ik2++)
+		for (size_t ik1 = 0; ik1 < L1; ik1++) {
+			const size_t ik = ik1 + ik2*L1 + ik3*L2*L1;
+			const size_t ikq3 = (ik3 + qs[2 + iq*3])%L3;
+			const size_t ikq2 = (ik2 + qs[1 + iq*3])%L2;
+			const size_t ikq1 = (ik1 + qs[0 + iq*3])%L1;
+			const size_t ikq = ikq1 + ikq2*L1 + ikq3*L2*L1;
+			for (size_t b = 0; b < Nband; b++)
+			for (size_t a = 0; a < Nband; a++) {
+				const double ebk = ek[b + ik*Nband];
+				const double eakq = ek[a + ikq*Nband];
+				if ((eakq >= 0 && ebk >= 0) || (eakq <= 0 && ebk <= 0)) continue;
+				const double ee = ebk - eakq;
+				const double ff = (eakq > 0) ? 1.0 : -1.0;
+
+				double complex UU = 0.0;
+				const size_t offset_k = b*Nband + ik*Nband*Nband;
+				const size_t offset_kq = a*Nband + ikq*Nband*Nband;
+				for (size_t i = 0; i < Nband; i++) {
+					UU += sub_phase[i + iq*Nband]*Ukdag[i + offset_k]*conj(Ukdag[i + offset_kq]);
+				}
+				const double UUUU = creal(UU)*creal(UU) + cimag(UU)*cimag(UU);
+				if (UUUU < 1e-12)
+					continue;
+
+				for (size_t iw = 0; iw < nw; iw++) {
+					const double wee = ws[iw] + ee;
+					const double frac = ff*UUUU/(wee*wee + gamma_sq);
+					chi0_real[iw + iq*nw + a*nq*nw + b*Nband*nq*nw] += wee*frac;
+					chi0_imag[iw + iq*nw + a*nq*nw + b*Nband*nq*nw] += -gamma*frac;
+				}
+			}
+		}
+	}
+
+	const double invN = 1.0/(L3*L2*L1);
+	for (size_t i = 0; i < Nband*Nband*nq*nw; i++) {
+		chi0_real[i] *= invN;
+		chi0_imag[i] *= invN;
+	}
+}
+
+EXPORT void calc_chi0_allorb_exact(
+		double *restrict chi0_real, double *restrict chi0_imag,
+		const double *restrict ek,
+		const double complex *restrict Ukdag,
+		const double complex *restrict sub_phase,
+		const double *restrict ws, const size_t nw, const double gamma,
+		const int32_t *restrict qs, const size_t nq,
+		const size_t L3, const size_t L2, const size_t L1, const size_t Nband,
+		const int n_threads)
+{
+	const double gamma_sq = gamma*gamma;
+
+	double complex *UU_all = my_alloc(n_threads*Nband * sizeof(double complex));
+
+	#pragma omp parallel for num_threads(n_threads)
+	for (size_t iq = 0; iq < nq; iq++) {
+		double complex *UU = UU_all + omp_get_thread_num()*Nband;
+		for (size_t ik3 = 0; ik3 < L3; ik3++)
+		for (size_t ik2 = 0; ik2 < L2; ik2++)
+		for (size_t ik1 = 0; ik1 < L1; ik1++) {
+			const size_t ik = ik1 + ik2*L1 + ik3*L2*L1;
+			const size_t ikq3 = (ik3 + qs[2 + iq*3])%L3;
+			const size_t ikq2 = (ik2 + qs[1 + iq*3])%L2;
+			const size_t ikq1 = (ik1 + qs[0 + iq*3])%L1;
+			const size_t ikq = ikq1 + ikq2*L1 + ikq3*L2*L1;
+			for (size_t b = 0; b < Nband; b++)
+			for (size_t a = 0; a < Nband; a++) {
+				const double ebk = ek[b + ik*Nband];
+				const double eakq = ek[a + ikq*Nband];
+				if ((eakq >= 0 && ebk >= 0) || (eakq <= 0 && ebk <= 0)) continue;
+				const double ee = ebk - eakq;
+				const double ff = (eakq > 0) ? 1.0 : -1.0;
+
+				const size_t offset_k = b*Nband + ik*Nband*Nband;
+				const size_t offset_kq = a*Nband + ikq*Nband*Nband;
+
+				for (size_t i = 0; i < Nband; i++)
+					UU[i] = sub_phase[i + iq*Nband]*Ukdag[i + offset_k]*conj(Ukdag[i + offset_kq]);
+				for (size_t i = 0; i < Nband; i++)
+				for (size_t j = 0; j < Nband; j++) {
+					const double complex ffUUUUij = ff*UU[i]*conj(UU[j]);
+					if (cabs(ffUUUUij) < 1e-12)
+						continue;
+					for (size_t iw = 0; iw < nw; iw++) {
+						const double wee = ws[iw] + ee;
+						const double complex frac = ffUUUUij/(wee*wee + gamma_sq);
+						chi0_real[iw + iq*nw + i*nq*nw + j*Nband*nq*nw] += wee*creal(frac) + gamma*cimag(frac);
+						chi0_imag[iw + iq*nw + i*nq*nw + j*Nband*nq*nw] += -gamma*creal(frac) + wee*cimag(frac);
+					}
+				}
+			}
+		}
+	}
+
+	const double invN = 1.0/(L3*L2*L1);
+	for (size_t i = 0; i < Nband*Nband*nq*nw; i++) {
+		chi0_real[i] *= invN;
+		chi0_imag[i] *= invN;
+	}
+
+	free(UU_all);
+}
+
+EXPORT void calc_chi0_orbij_exact(
+		double *restrict chi0_real, double *restrict chi0_imag,
+		const double *restrict ek,
+		const double complex *restrict Ukdag,
+		const double complex *restrict sub_phase,
+		const double *restrict ws, const size_t nw, const double gamma,
+		const int32_t *restrict qs, const size_t nq,
+		const size_t L3, const size_t L2, const size_t L1, const size_t Nband, const size_t orbi, const size_t orbj,
+		const int n_threads)
+{
+	const double gamma_sq = gamma*gamma;
+
+	#pragma omp parallel for num_threads(n_threads)
+	for (size_t iq = 0; iq < nq; iq++) {
+		for (size_t ik3 = 0; ik3 < L3; ik3++)
+		for (size_t ik2 = 0; ik2 < L2; ik2++)
+		for (size_t ik1 = 0; ik1 < L1; ik1++) {
+			const size_t ik = ik1 + ik2*L1 + ik3*L2*L1;
+			const size_t ikq3 = (ik3 + qs[2 + iq*3])%L3;
+			const size_t ikq2 = (ik2 + qs[1 + iq*3])%L2;
+			const size_t ikq1 = (ik1 + qs[0 + iq*3])%L1;
+			const size_t ikq = ikq1 + ikq2*L1 + ikq3*L2*L1;
+			for (size_t b = 0; b < Nband; b++)
+			for (size_t a = 0; a < Nband; a++) {
+				const double ebk = ek[b + ik*Nband];
+				const double eakq = ek[a + ikq*Nband];
+				if ((eakq >= 0 && ebk >= 0) || (eakq <= 0 && ebk <= 0)) continue;
+				const double ee = ebk - eakq;
+				const double ff = (eakq > 0) ? 1.0 : -1.0;
+
+				const size_t offset_k = b*Nband + ik*Nband*Nband;
+				const size_t offset_kq = a*Nband + ikq*Nband*Nband;
+
+				const double complex UUi = sub_phase[orbi + iq*Nband]*Ukdag[orbi + offset_k]*conj(Ukdag[orbi + offset_kq]);
+				const double complex UUj = sub_phase[orbj + iq*Nband]*Ukdag[orbj + offset_k]*conj(Ukdag[orbj + offset_kq]);
+				const double complex ffUUUUij = ff*UUi*conj(UUj);
+				if (cabs(ffUUUUij) < 1e-12)
+					continue;
+				for (size_t iw = 0; iw < nw; iw++) {
+					const double wee = ws[iw] + ee;
+					const double complex frac = ffUUUUij/(wee*wee + gamma_sq);
+					chi0_real[iw + iq*nw] += wee*creal(frac) + gamma*cimag(frac);
+					chi0_imag[iw + iq*nw] += -gamma*creal(frac) + wee*cimag(frac);
+				}
+			}
+		}
+	}
+
+	const double invN = 1.0/(L3*L2*L1);
+	for (size_t i = 0; i < nq*nw; i++) {
+		chi0_real[i] *= invN;
+		chi0_imag[i] *= invN;
+	}
+}

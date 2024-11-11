@@ -4,6 +4,7 @@
 
 #define MEM_ALIGN 64
 #define PAD_UP(size, align) ((((size) + (align) - 1)/(align)) * (align))
+#define my_alloc(size) aligned_alloc(MEM_ALIGN, PAD_UP((size), MEM_ALIGN))
 
 #if defined(_WIN32) || defined(_WIN64)
 	#define EXPORT __declspec(dllexport)
@@ -30,12 +31,12 @@ EXPORT void par_eigh(
 {
 	const int lrwork = PAD_UP(3*n - 2, MEM_ALIGN/sizeof(double));
 	double complex lwork_ = 0;
-	double *restrict rwork = aligned_alloc(MEM_ALIGN, n_threads*lrwork*sizeof(double));
+	double *restrict rwork = my_alloc(n_threads*lrwork*sizeof(double));
 
 	zheev("V", lower ? "L" : "U", &n, (MKL_Complex16 *)a, &n, eigvals,
 		(MKL_Complex16 *)&lwork_, &(int){-1}, rwork, &(int){0});
 	const int lwork = PAD_UP((int)(creal(lwork_)), MEM_ALIGN/sizeof(MKL_Complex16));
-	MKL_Complex16 *restrict work = aligned_alloc(MEM_ALIGN, n_threads*lwork*sizeof(MKL_Complex16));
+	MKL_Complex16 *restrict work = my_alloc(n_threads*lwork*sizeof(MKL_Complex16));
 
 	#pragma omp parallel num_threads(n_threads)
 	{
@@ -139,7 +140,7 @@ EXPORT void calc_chi0_binned(
 			ek_min = ek[i];
 	}
 	const size_t nbin = PAD_UP((size_t)((ek_max - ek_min)/dw) + 4, MEM_ALIGN/sizeof(double));
-	double *buffer = aligned_alloc(MEM_ALIGN, n_threads*nbin * sizeof(double));
+	double *buffer = my_alloc(n_threads*nbin * sizeof(double));
 
 	#pragma omp parallel num_threads(n_threads)
 	{
